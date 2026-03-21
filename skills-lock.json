@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "newapi": {
+      "source": "QuantumNous/skills",
+      "sourceType": "github",
+      "computedHash": "9c43d9d7bbdb57ec3b1f1c4192075885433a42c0af79f15d1982eb97cce0991c"
+    }
+  }
+}
