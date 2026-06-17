@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"fmt"
 	"log"
@@ -90,7 +91,7 @@ func main() {
 
 		go model.SyncChannelCache(common.SyncFrequency)
 	}
-	wsmanager.StartSubscriber()
+	wsmanager.StartSubscriber(context.Background())
 
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
