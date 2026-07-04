@@ -1,0 +1,53 @@
+services:
+  new-api:
+    image: 'calciumion/new-api:v0.13.2'
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - SERVICE_URL_NEW_API_3000
+      - 'SQL_DSN=postgres://$SERVICE_USER_POSTGRES:$SERVICE_PASSWORD_POSTGRES@postgresql:5432/${POSTGRES_DATABASE:-newapi}?sslmode=disable&TimeZone=${TZ:-Asia/Shanghai}'
+      - 'REDIS_CONN_STRING=redis://redis:6379'
+      - 'TZ=${TZ:-Asia/Shanghai}'
+      - SESSION_SECRET=$SERVICE_BASE64_64_SESSION_SECRET
+      - 'ERROR_LOG_ENABLED=${ERROR_LOG_ENABLED:-true}'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "wget -q -O - http://localhost:3000/api/status | grep -o '\"success\":\\s*true' | awk -F: '{print $2}'"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  postgresql:
+    image: 'postgres:16-alpine'
+    environment:
+      - POSTGRES_USER=$SERVICE_USER_POSTGRES
+      - POSTGRES_PASSWORD=$SERVICE_PASSWORD_POSTGRES
+      - 'POSTGRES_DB=${POSTGRES_DATABASE:-newapi}'
+    volumes:
+      - 'postgresql-data:/var/lib/postgresql/data'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB:-newapi}'
+      interval: 5s
+      timeout: 10s
+      retries: 20
+  redis:
+    image: 'redis:7-alpine'
+    volumes:
+      - 'redis-data:/data'
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - PING
+      interval: 5s
+      timeout: 10s
+      retries: 20
+networks:
+  aigateway:
+    name: aigateway
+    external: true
