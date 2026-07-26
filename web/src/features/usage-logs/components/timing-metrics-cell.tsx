@@ -151,6 +151,7 @@ export function TimingMetricsCell(props: TimingMetricsCellProps) {
 
 interface StreamTpsCellProps {
   isStream: boolean
+  isWebSocket?: boolean
   tokensPerSecond?: number | null
   streamStatus?: LogOtherData['stream_status']
   className?: string
@@ -158,13 +159,21 @@ interface StreamTpsCellProps {
 
 export function StreamTpsCell(props: StreamTpsCellProps) {
   const { t } = useTranslation()
+  const isStreamingTransport = props.isStream || props.isWebSocket === true
   const showStreamError =
-    props.isStream && props.streamStatus && props.streamStatus.status !== 'ok'
+    isStreamingTransport &&
+    props.streamStatus &&
+    props.streamStatus.status !== 'ok'
   const tpsLabel =
     props.tokensPerSecond != null
       ? `${Math.round(props.tokensPerSecond)} t/s`
       : '—'
-  const streamLabel = props.isStream ? t('Stream') : t('Non-stream')
+  let streamLabel = t('Non-stream')
+  if (props.isWebSocket) {
+    streamLabel = t('WS')
+  } else if (props.isStream) {
+    streamLabel = t('Stream')
+  }
 
   return (
     <div
@@ -176,7 +185,7 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
       <span
         className={cn(
           'inline-flex items-center gap-1 font-medium',
-          props.isStream ? 'text-info' : 'text-muted-foreground'
+          isStreamingTransport ? 'text-info' : 'text-muted-foreground'
         )}
       >
         {streamLabel}

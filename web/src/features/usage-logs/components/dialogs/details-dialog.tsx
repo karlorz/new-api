@@ -719,7 +719,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
                   )}
                 >
                   {formatUseTime(props.log.use_time)}
-                  {props.log.is_stream &&
+                  {(props.log.is_stream || other?.ws === true) &&
                     other?.frt != null &&
                     other.frt > 0 && (
                       <span
