@@ -35,10 +35,29 @@ const responsesWSEventTypeResponseCreate = "response.create"
 // and idle timeout, channel disable and shutdown all block behind it.
 const responsesWSWriteTimeout = 30 * time.Second
 
-// responsesWSMaxMessageBytes bounds one inbound WebSocket frame. The HTTP body
-// limit does not apply to WebSocket frames, so a valid key could otherwise
-// stream unbounded data into memory.
-var responsesWSMaxMessageBytes = int64(common.GetEnvOrDefault("WEBSOCKET_MAX_MESSAGE_MB", 16)) << 20
+// responsesWSMaxMessageBytes bounds one inbound WebSocket message. The HTTP
+// body limit does not cover WebSocket frames, so without it a valid key can
+// stream unbounded data into memory. It follows MAX_REQUEST_BODY_MB so the same
+// payload is accepted over both transports of /v1/responses, and only diverges
+// when WEBSOCKET_MAX_MESSAGE_MB is set explicitly.
+//
+// Read lazily: constant.MaxRequestBodyMB is populated by InitEnv from main, so
+// a package-level var here would capture zero.
+//
+// NOTE: gorilla enforces this against the compressed wire length (conn.go:924,
+// before the decompression reader is attached at conn.go:1019). It is a real
+// memory bound only while permessage-deflate stays disabled — see the upgrader
+// in controller/relay.go.
+func responsesWSMaxMessageBytes() int64 {
+	maxMB := common.GetEnvOrDefault("WEBSOCKET_MAX_MESSAGE_MB", 0)
+	if maxMB <= 0 {
+		maxMB = appconstant.MaxRequestBodyMB
+	}
+	if maxMB <= 0 {
+		maxMB = 32
+	}
+	return int64(maxMB) << 20
+}
 
 // responsesWSMaxPerUser caps concurrent Responses WebSocket sessions per user;
 // 0 disables the cap. Idle sessions hold a goroutine, a socket and an upstream
@@ -135,7 +154,7 @@ func responsesWebSocketHelper(c *gin.Context, client *websocket.Conn, refreshRea
 	}
 	defer session.closeTarget()
 	defer session.settleCurrent()
-	client.SetReadLimit(responsesWSMaxMessageBytes)
+	client.SetReadLimit(responsesWSMaxMessageBytes())
 	if err := refreshReadDeadline(client); err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 	}
@@ -611,7 +630,7 @@ func dialResponsesWebSocketUpstream(c *gin.Context, adaptor relaychannel.Adaptor
 		}
 		return nil, types.NewErrorWithStatusCode(fmt.Errorf("dial failed to %s: %w", relaycommon.SanitizeURLForLog(fullRequestURL), err), types.ErrorCodeDoRequestFailed, statusCode)
 	}
-	targetConn.SetReadLimit(responsesWSMaxMessageBytes)
+	targetConn.SetReadLimit(responsesWSMaxMessageBytes())
 	return targetConn, nil
 }
 
