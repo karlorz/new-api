@@ -946,6 +946,11 @@ type Input struct {
 	Type    string          `json:"type,omitempty"`
 	Role    string          `json:"role,omitempty"`
 	Content json.RawMessage `json:"content,omitempty"`
+	// Output carries function_call_output payloads. It must be counted: an
+	// incremental turn (notably over the Responses WebSocket transport) can
+	// consist of nothing but a large tool result, which would otherwise be
+	// estimated at zero tokens and under-reserve quota.
+	Output json.RawMessage `json:"output,omitempty"`
 }
 
 type MediaInput struct {
@@ -985,6 +990,14 @@ func (r *OpenAIResponsesRequest) ParseInput() []MediaInput {
 		var inputs []Input
 		_ = common.Unmarshal(r.Input, &inputs)
 		for _, input := range inputs {
+			if len(input.Output) > 0 {
+				text := string(input.Output)
+				if common.GetJsonType(input.Output) == "string" {
+					_ = common.Unmarshal(input.Output, &text)
+				}
+				mediaInputs = append(mediaInputs, MediaInput{Type: "input_text", Text: text})
+			}
+
 			if common.GetJsonType(input.Content) == "string" {
 				var str string
 				_ = common.Unmarshal(input.Content, &str)

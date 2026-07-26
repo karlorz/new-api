@@ -13,7 +13,10 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeResponsesWSCreateEventWrapper(t *testing.T) {
@@ -292,6 +295,97 @@ func TestHandleControlEventWriteFailureSendsResponsesError(t *testing.T) {
 	if data.Type != "error" || data.Status == 0 {
 		t.Fatalf("unexpected error event: %s", payload)
 	}
+}
+
+// TestFinalizeResponsesWSUsageBillsInterruptedStream pins the billing policy
+// for a stream that never reached its terminal event — the client disconnected,
+// upstream died, or the idle timeout fired. Upstream already generated (and
+// charged us for) that output, so it must be billable from the observed delta
+// text, not refunded in full.
+func TestFinalizeResponsesWSUsageBillsInterruptedStream(t *testing.T) {
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-sonnet-4"}}
+	info.SetEstimatePromptTokens(123)
+	state := &responsesWSCallState{info: info, usage: &dto.Usage{}}
+	state.outputText.WriteString("partial answer streamed before the client vanished")
+
+	require.True(t, finalizeResponsesWSUsage(state), "generated output must be billable")
+	assert.Positive(t, state.usage.CompletionTokens, "completion tokens should be counted from observed output")
+	assert.Equal(t, 123, state.usage.PromptTokens, "prompt tokens should fall back to the pre-consume estimate")
+	assert.Equal(t, state.usage.PromptTokens+state.usage.CompletionTokens, state.usage.TotalTokens)
+}
+
+func TestFinalizeResponsesWSUsageReportsNothingBillableWithoutOutput(t *testing.T) {
+	state := &responsesWSCallState{
+		info:  &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-sonnet-4"}},
+		usage: &dto.Usage{},
+	}
+
+	assert.False(t, finalizeResponsesWSUsage(state), "a call that produced nothing must stay refundable")
+}
+
+// TestFinishCallAbortedRefundsDespiteObservedOutput guards the other side of the
+// policy: when the request never reached upstream there is nothing to pay for,
+// even if stale state carries text.
+func TestFinishCallAbortedRefundsDespiteObservedOutput(t *testing.T) {
+	var committed *bool
+	session := &responsesWSSession{}
+	state := &responsesWSCallState{
+		info:  &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-sonnet-4"}},
+		usage: &dto.Usage{},
+		commitRate: func(success bool) {
+			committed = &success
+		},
+	}
+	state.outputText.WriteString("never sent upstream")
+	session.current = state
+
+	session.finishCall(state, responsesWSCallAborted)
+
+	assert.Nil(t, session.getCurrent(), "current response was not released")
+	require.NotNil(t, committed, "commit was not invoked")
+	assert.False(t, *committed, "an aborted call must not be committed as a successful request")
+}
+
+// TestApplyTerminalResponseUsageRecordsFailedResponseUsage covers the fix for
+// terminal failure events: upstream reports real usage on response.failed, and
+// discarding it meant billing nothing for output the provider already charged.
+func TestApplyTerminalResponseUsageRecordsFailedResponseUsage(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	session := &responsesWSSession{c: c}
+	state := &responsesWSCallState{
+		info:  &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "claude-sonnet-4"}},
+		usage: &dto.Usage{},
+	}
+
+	session.applyTerminalResponseUsage(state, &dto.OpenAIResponsesResponse{
+		Usage: &dto.Usage{InputTokens: 40, OutputTokens: 9, TotalTokens: 49},
+	})
+
+	assert.Equal(t, 40, state.usage.PromptTokens)
+	assert.Equal(t, 9, state.usage.CompletionTokens)
+}
+
+func TestResponsesWSSlotCapIsPerUserAndReleased(t *testing.T) {
+	original := responsesWSMaxPerUser
+	responsesWSMaxPerUser = 2
+	defer func() { responsesWSMaxPerUser = original }()
+
+	const userId = 4242
+	require.True(t, acquireResponsesWSSlot(userId))
+	require.True(t, acquireResponsesWSSlot(userId))
+	assert.False(t, acquireResponsesWSSlot(userId), "third concurrent session must be rejected")
+	assert.True(t, acquireResponsesWSSlot(userId+1), "cap must be scoped per user")
+
+	releaseResponsesWSSlot(userId)
+	assert.True(t, acquireResponsesWSSlot(userId), "releasing must free a slot")
+
+	releaseResponsesWSSlot(userId)
+	releaseResponsesWSSlot(userId)
+	releaseResponsesWSSlot(userId + 1)
+
+	responsesWSCountMu.Lock()
+	defer responsesWSCountMu.Unlock()
+	assert.Empty(t, responsesWSCounts, "fully released users must not leak counter entries")
 }
 
 func TestObserveUpstreamFailedReleasesCurrent(t *testing.T) {
