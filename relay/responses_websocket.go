@@ -484,6 +484,13 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 	req := create.Request
 	common.SetContextKey(s.c, appconstant.ContextKeyRequestStartTime, time.Now())
 	relayInfo := relaycommon.GenRelayInfoResponses(s.c, &req)
+	// The stream field is stripped from the frame before parsing, so
+	// GenRelayInfoResponses sees stream=nil and would record the call as
+	// non-stream, which also hides first-response time in the usage-log UI.
+	// WebSocket delivery is inherently incremental; mark it streaming like the
+	// realtime relay does.
+	relayInfo.IsStream = true
+	s.c.Set(string(appconstant.ContextKeyIsStream), true)
 	relayInfo.RequestId = fmt.Sprintf("%s-ws-%d", relayInfo.RequestId, s.nextEventIndex)
 	s.nextEventIndex++
 
