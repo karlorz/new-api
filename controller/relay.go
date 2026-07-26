@@ -270,6 +270,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 }
 
+// EnableCompression is deliberately left off. gorilla's permessage-deflate is
+// experimental and has no context takeover, so each message compresses in
+// isolation — the streamed delta events are too small to gain from that, while
+// every frame costs a deflate round trip. More importantly, SetReadLimit is
+// enforced against the compressed wire length, so enabling compression would
+// turn the WebSocket read limits into a compressed bound and reopen the zip
+// bomb hole that MAX_REQUEST_BODY_MB exists to close on the HTTP side.
 var upgrader = websocket.Upgrader{
 	Subprotocols: []string{"realtime", "responses"}, // WS 握手支持的协议，如果有使用 Sec-WebSocket-Protocol，则必须在此声明对应的 Protocol
 	CheckOrigin: func(r *http.Request) bool {
