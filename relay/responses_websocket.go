@@ -30,6 +30,40 @@ import (
 
 const responsesWSEventTypeResponseCreate = "response.create"
 
+// responsesWSWriteTimeout bounds a single blocked write so a peer that stops
+// reading cannot pin a connection forever. Without it the write never returns,
+// and idle timeout, channel disable and shutdown all block behind it.
+const responsesWSWriteTimeout = 30 * time.Second
+
+// responsesWSMaxMessageBytes bounds one inbound WebSocket frame. The HTTP body
+// limit does not apply to WebSocket frames, so a valid key could otherwise
+// stream unbounded data into memory.
+var responsesWSMaxMessageBytes = int64(common.GetEnvOrDefault("WEBSOCKET_MAX_MESSAGE_MB", 16)) << 20
+
+// responsesWSMaxPerUser caps concurrent Responses WebSocket sessions per user;
+// 0 disables the cap. Idle sessions hold a goroutine, a socket and an upstream
+// connection for up to WEBSOCKET_IDLE_TIMEOUT_MINUTES.
+var responsesWSMaxPerUser = common.GetEnvOrDefault("RESPONSES_WEBSOCKET_MAX_PER_USER", 8)
+
+var (
+	responsesWSCountMu sync.Mutex
+	responsesWSCounts  = map[int]int{}
+)
+
+// responsesWSCallOutcome decides how a finished call is billed.
+type responsesWSCallOutcome int
+
+const (
+	// responsesWSCallAborted means upstream never accepted the request payload,
+	// so nothing was generated and the pre-consumed quota is returned in full.
+	responsesWSCallAborted responsesWSCallOutcome = iota
+	// responsesWSCallSettled means upstream accepted the request: bill what was
+	// observed, whether the stream ended normally, failed, or was cut short by a
+	// disconnect. This matches the HTTP and realtime relays, which also settle
+	// on mid-stream client disconnect rather than refunding generated output.
+	responsesWSCallSettled
+)
+
 type responsesWSCreateEvent struct {
 	Type    string            `json:"type"`
 	EventID string            `json:"event_id,omitempty"`
@@ -50,10 +84,15 @@ type responsesWSErrorEvent struct {
 
 type responsesWSCallState struct {
 	info       *relaycommon.RelayInfo
+	commitRate middleware.ModelRequestRateLimitCommit
+
+	// mu guards usage and outputText. The upstream reader goroutine appends to
+	// them while the client goroutine may win the race to finish the call on a
+	// disconnect and read them for settlement.
+	mu         sync.Mutex
 	usage      *dto.Usage
 	outputText strings.Builder
 	imageCalls *relaycommon.ImageGenerationCallCounter
-	commitRate middleware.ModelRequestRateLimitCommit
 }
 
 type responsesWSSession struct {
@@ -67,6 +106,10 @@ type responsesWSSession struct {
 	closeOnce      sync.Once
 
 	clientWriteMu sync.Mutex
+	// targetMu guards target and unregister. It is never held across network
+	// I/O, so closing the session cannot block behind an in-flight write.
+	targetMu sync.Mutex
+	// targetWriteMu only serializes writes, as gorilla allows a single writer.
 	targetWriteMu sync.Mutex
 	stateMu       sync.Mutex
 	current       *responsesWSCallState
@@ -77,12 +120,24 @@ func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn) *types.New
 }
 
 func responsesWebSocketHelper(c *gin.Context, client *websocket.Conn, refreshReadDeadline func(*websocket.Conn) error) *types.NewAPIError {
+	userId := common.GetContextKeyInt(c, appconstant.ContextKeyUserId)
+	if !acquireResponsesWSSlot(userId) {
+		return types.NewErrorWithStatusCode(
+			fmt.Errorf("too many concurrent responses websocket connections (limit %d)", responsesWSMaxPerUser),
+			types.ErrorCodeInvalidRequest,
+			http.StatusTooManyRequests,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	defer releaseResponsesWSSlot(userId)
+
 	session := &responsesWSSession{
 		c:      c,
 		client: client,
 	}
 	defer session.closeTarget()
-	defer session.failCurrent()
+	defer session.settleCurrent()
+	client.SetReadLimit(responsesWSMaxMessageBytes)
 	if err := refreshReadDeadline(client); err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponse, types.ErrOptionWithSkipRetry())
 	}
@@ -126,8 +181,8 @@ func responsesWebSocketHelper(c *gin.Context, client *websocket.Conn, refreshRea
 			session.sendError("", newResponsesWSInvalidRequestError(err))
 			continue
 		}
-		if create.Request.Model == "" {
-			session.sendError(eventID, newResponsesWSInvalidRequestError(errors.New("model is required")))
+		if err := helper.ValidateResponsesRequest(&create.Request); err != nil {
+			session.sendError(eventID, newResponsesWSInvalidRequestError(err))
 			continue
 		}
 		if err := session.handleResponseCreate(create, eventID); err != nil {
@@ -279,7 +334,7 @@ func (s *responsesWSSession) handleTargetWriteFailure(err error) *types.NewAPIEr
 }
 
 func (s *responsesWSSession) handleTargetWriteFailureWithState(state *responsesWSCallState, err error) *types.NewAPIError {
-	s.finishCall(state, false)
+	s.finishCall(state, responsesWSCallAborted)
 	return s.handleTargetWriteFailure(err)
 }
 
@@ -357,7 +412,7 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 			return types.NewErrorWithStatusCode(errors.New("another response.create is already in progress on this websocket connection"), types.ErrorCodeInvalidRequest, http.StatusConflict, types.ErrOptionWithSkipRetry())
 		}
 		if err := s.writeTarget(websocket.TextMessage, payload); err != nil {
-			s.finishCall(state, false)
+			s.finishCall(state, responsesWSCallAborted)
 			s.closeTarget()
 			apiErr = types.NewError(err, types.ErrorCodeBadResponse)
 			var shouldRetry bool
@@ -560,8 +615,9 @@ func dialResponsesWebSocketUpstream(c *gin.Context, adaptor relaychannel.Adaptor
 		if resp != nil {
 			statusCode = resp.StatusCode
 		}
-		return nil, types.NewErrorWithStatusCode(fmt.Errorf("dial failed to %s: %w", fullRequestURL, err), types.ErrorCodeDoRequestFailed, statusCode)
+		return nil, types.NewErrorWithStatusCode(fmt.Errorf("dial failed to %s: %w", relaycommon.SanitizeURLForLog(fullRequestURL), err), types.ErrorCodeDoRequestFailed, statusCode)
 	}
+	targetConn.SetReadLimit(responsesWSMaxMessageBytes)
 	return targetConn, nil
 }
 
@@ -593,20 +649,26 @@ func (s *responsesWSSession) startTargetReader() {
 				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 					logger.LogError(s.c, "responses websocket upstream read failed: "+err.Error())
 				}
-				s.failCurrent()
+				s.settleCurrent()
 				_ = s.client.Close()
 				return
 			}
 			s.observeUpstreamMessage(message)
 			if err := s.writeClient(messageType, message); err != nil {
 				logger.LogError(s.c, "responses websocket client write failed: "+err.Error())
-				s.failCurrent()
+				s.settleCurrent()
 				s.closeTarget()
 				return
 			}
 			// Upstream traffic also counts as activity: a long generation can
 			// stream for minutes while the client only listens, and that must
 			// not trip the client idle timeout.
+			//
+			// Calling this from the reader goroutine while the client goroutine
+			// blocks in ReadMessage is safe despite gorilla listing
+			// SetReadDeadline as a read method: it is a bare passthrough to
+			// net.Conn.SetReadDeadline (conn.go:1105), which is documented to be
+			// callable concurrently with a blocked Read.
 			_ = relaycommon.RefreshClientWebSocketReadDeadline(s.client)
 		}
 	}()
@@ -625,13 +687,17 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) {
 	}
 
 	switch streamResponse.Type {
-	case "response.completed", "response.done", "response.incomplete":
+	case "response.completed", "response.done", "response.incomplete",
+		"response.failed", "response.cancelled", "response.canceled":
+		// A terminal event carries the authoritative usage even when the response
+		// failed, so settle on it instead of discarding what upstream generated
+		// and already billed us for.
 		s.applyTerminalResponseUsage(state, streamResponse.Response)
-		s.finishCall(state, true)
-	case "response.failed", "response.cancelled", "response.canceled":
-		s.finishCall(state, false)
+		s.finishCall(state, responsesWSCallSettled)
 	case "response.output_text.delta":
+		state.mu.Lock()
 		state.outputText.WriteString(streamResponse.Delta)
+		state.mu.Unlock()
 	case dto.ResponsesOutputTypeItemDone:
 		if streamResponse.Item != nil {
 			state.imageCalls.Observe(streamResponse.Item, streamResponse.OutputIndex)
@@ -643,7 +709,7 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) {
 			}
 		}
 	case "error":
-		s.finishCall(state, false)
+		s.finishCall(state, responsesWSCallSettled)
 	}
 }
 
@@ -652,7 +718,9 @@ func (s *responsesWSSession) applyTerminalResponseUsage(state *responsesWSCallSt
 		return
 	}
 	if response.Usage != nil {
+		state.mu.Lock()
 		service.ApplyResponsesUsage(state.usage, response.Usage)
+		state.mu.Unlock()
 	}
 	if relaycommon.IsNonBillableResponsesStatus(response.Status) {
 		state.imageCalls.Reset()
@@ -665,14 +733,18 @@ func (s *responsesWSSession) applyTerminalResponseUsage(state *responsesWSCallSt
 	state.imageCalls.Commit(state.info)
 }
 
-func (s *responsesWSSession) finishCall(state *responsesWSCallState, success bool) {
+func (s *responsesWSSession) finishCall(state *responsesWSCallState, outcome responsesWSCallOutcome) {
 	if state == nil {
 		return
 	}
 	if !s.clearCurrent(state) {
 		return
 	}
-	if !success {
+	// Refund only when upstream produced nothing: either it never accepted the
+	// request, or it accepted but no usage and no output text were observed.
+	// Anything actually generated gets billed, otherwise disconnecting just
+	// before the terminal event would yield free output.
+	if outcome == responsesWSCallAborted || !finalizeResponsesWSUsage(state) {
 		state.refund(s.c)
 		if state.commitRate != nil {
 			state.commitRate(false)
@@ -680,17 +752,25 @@ func (s *responsesWSSession) finishCall(state *responsesWSCallState, success boo
 		return
 	}
 
-	finalizeResponsesWSUsage(state)
-	service.PostTextConsumeQuota(s.c, state.info, state.usage, nil)
+	// Bill a snapshot: the goroutine that lost the clearCurrent race may still
+	// be applying a late terminal event to state.usage under state.mu.
+	state.mu.Lock()
+	usage := *state.usage
+	state.mu.Unlock()
+	service.PostTextConsumeQuota(s.c, state.info, &usage, nil)
 	if state.commitRate != nil {
 		state.commitRate(true)
 	}
 }
 
-func finalizeResponsesWSUsage(state *responsesWSCallState) {
+// finalizeResponsesWSUsage fills in what upstream did not report — the usual
+// case for a stream cut short — and reports whether anything is billable.
+func finalizeResponsesWSUsage(state *responsesWSCallState) bool {
 	if state == nil || state.usage == nil || state.info == nil {
-		return
+		return false
 	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	if state.usage.CompletionTokens == 0 {
 		if output := state.outputText.String(); output != "" {
 			state.usage.CompletionTokens = service.CountTextToken(output, state.info.UpstreamModelName)
@@ -702,6 +782,7 @@ func finalizeResponsesWSUsage(state *responsesWSCallState) {
 	if state.usage.TotalTokens == 0 {
 		state.usage.TotalTokens = state.usage.PromptTokens + state.usage.CompletionTokens
 	}
+	return state.usage.TotalTokens > 0
 }
 
 func (state *responsesWSCallState) refund(c *gin.Context) {
@@ -742,50 +823,89 @@ func (s *responsesWSSession) getCurrent() *responsesWSCallState {
 	return s.current
 }
 
-func (s *responsesWSSession) failCurrent() {
+// settleCurrent ends an in-flight call that was interrupted rather than
+// completed — client disconnect, upstream read failure, idle timeout or channel
+// shutdown. The payload already reached upstream, so it settles on observed
+// usage; finishCall still refunds if nothing was generated.
+func (s *responsesWSSession) settleCurrent() {
 	state := s.getCurrent()
 	if state != nil {
-		s.finishCall(state, false)
+		s.finishCall(state, responsesWSCallSettled)
 	}
+}
+
+func acquireResponsesWSSlot(userId int) bool {
+	if responsesWSMaxPerUser <= 0 || userId == 0 {
+		return true
+	}
+	responsesWSCountMu.Lock()
+	defer responsesWSCountMu.Unlock()
+	if responsesWSCounts[userId] >= responsesWSMaxPerUser {
+		return false
+	}
+	responsesWSCounts[userId]++
+	return true
+}
+
+func releaseResponsesWSSlot(userId int) {
+	if responsesWSMaxPerUser <= 0 || userId == 0 {
+		return
+	}
+	responsesWSCountMu.Lock()
+	defer responsesWSCountMu.Unlock()
+	if responsesWSCounts[userId] <= 1 {
+		delete(responsesWSCounts, userId)
+		return
+	}
+	responsesWSCounts[userId]--
 }
 
 func (s *responsesWSSession) writeClient(messageType int, message []byte) error {
 	s.clientWriteMu.Lock()
 	defer s.clientWriteMu.Unlock()
+	if err := s.client.SetWriteDeadline(time.Now().Add(responsesWSWriteTimeout)); err != nil {
+		return err
+	}
 	return s.client.WriteMessage(messageType, message)
 }
 
 func (s *responsesWSSession) hasTarget() bool {
-	s.targetWriteMu.Lock()
-	defer s.targetWriteMu.Unlock()
+	s.targetMu.Lock()
+	defer s.targetMu.Unlock()
 	return s.target != nil
 }
 
 func (s *responsesWSSession) getTarget() *websocket.Conn {
-	s.targetWriteMu.Lock()
-	defer s.targetWriteMu.Unlock()
+	s.targetMu.Lock()
+	defer s.targetMu.Unlock()
 	return s.target
 }
 
 func (s *responsesWSSession) isTarget(target *websocket.Conn) bool {
-	s.targetWriteMu.Lock()
-	defer s.targetWriteMu.Unlock()
+	s.targetMu.Lock()
+	defer s.targetMu.Unlock()
 	return target != nil && s.target == target
 }
 
 func (s *responsesWSSession) setTarget(target *websocket.Conn) {
-	s.targetWriteMu.Lock()
-	defer s.targetWriteMu.Unlock()
+	s.targetMu.Lock()
+	defer s.targetMu.Unlock()
 	s.target = target
 }
 
 func (s *responsesWSSession) writeTarget(messageType int, message []byte) error {
-	s.targetWriteMu.Lock()
-	defer s.targetWriteMu.Unlock()
-	if s.target == nil {
+	// Resolve the target under targetMu, then release it before writing: a slow
+	// upstream must not be able to block closeTarget or the idle/policy paths.
+	target := s.getTarget()
+	if target == nil {
 		return errors.New("responses websocket upstream is not connected")
 	}
-	return s.target.WriteMessage(messageType, message)
+	s.targetWriteMu.Lock()
+	defer s.targetWriteMu.Unlock()
+	if err := target.SetWriteDeadline(time.Now().Add(responsesWSWriteTimeout)); err != nil {
+		return err
+	}
+	return target.WriteMessage(messageType, message)
 }
 
 func (s *responsesWSSession) sendError(eventID string, apiErr *types.NewAPIError) {
@@ -819,12 +939,12 @@ func buildResponsesWSErrorPayload(eventID string, apiErr *types.NewAPIError) ([]
 func (s *responsesWSSession) closeTarget() {
 	var target *websocket.Conn
 	var unregister func()
-	s.targetWriteMu.Lock()
+	s.targetMu.Lock()
 	target = s.target
 	s.target = nil
 	unregister = s.unregister
 	s.unregister = nil
-	s.targetWriteMu.Unlock()
+	s.targetMu.Unlock()
 	if unregister != nil {
 		unregister()
 	}
@@ -837,12 +957,12 @@ func (s *responsesWSSession) registerChannelClose(channelID int) {
 	unregister := wsmanager.Register(channelID, wsmanager.KindResponses, func(reason string) {
 		s.closeForPolicy(reason)
 	})
-	s.targetWriteMu.Lock()
+	s.targetMu.Lock()
 	if s.unregister != nil {
 		s.unregister()
 	}
 	s.unregister = unregister
-	s.targetWriteMu.Unlock()
+	s.targetMu.Unlock()
 }
 
 func (s *responsesWSSession) closeForPolicy(reason string) {
@@ -855,7 +975,7 @@ func (s *responsesWSSession) closeForIdleTimeout() {
 
 func (s *responsesWSSession) closeWithCode(code int, reason string) {
 	s.closeOnce.Do(func() {
-		s.failCurrent()
+		s.settleCurrent()
 		deadline := time.Now().Add(time.Second)
 		closeMessage := websocket.FormatCloseMessage(code, reason)
 		_ = s.client.WriteControl(websocket.CloseMessage, closeMessage, deadline)

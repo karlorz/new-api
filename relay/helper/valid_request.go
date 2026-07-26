@@ -130,20 +130,33 @@ func exceedsMaxTokensLimit(values ...*uint) bool {
 	return false
 }
 
+// ValidateResponsesRequest enforces the bounds that protect pre-consume quota
+// math for a Responses call. Every transport that builds one — HTTP and the
+// WebSocket relay alike — must run it before pricing, so an unvalidated
+// max_output_tokens can never reach the billing multiplication.
+func ValidateResponsesRequest(request *dto.OpenAIResponsesRequest) error {
+	if request.Model == "" {
+		return errors.New("model is required")
+	}
+	if exceedsMaxTokensLimit(request.MaxOutputTokens) {
+		return errors.New("max_output_tokens is invalid")
+	}
+	return nil
+}
+
 func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest, error) {
 	request := &dto.OpenAIResponsesRequest{}
 	err := common.UnmarshalBodyReusable(c, request)
 	if err != nil {
 		return nil, err
 	}
-	if request.Model == "" {
-		return nil, errors.New("model is required")
+	if err := ValidateResponsesRequest(request); err != nil {
+		return nil, err
 	}
+	// Only the HTTP transport requires input on every call: a WebSocket session
+	// keeps conversation state upstream, so an incremental turn may omit it.
 	if request.Input == nil {
 		return nil, errors.New("input is required")
-	}
-	if exceedsMaxTokensLimit(request.MaxOutputTokens) {
-		return nil, errors.New("max_output_tokens is invalid")
 	}
 	return request, nil
 }

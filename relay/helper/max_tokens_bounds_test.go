@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/dto"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -68,5 +69,24 @@ func TestMaxTokensBounds(t *testing.T) {
 		_, err := GetAndValidateResponsesRequest(c)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "max_output_tokens is invalid")
+	})
+
+	// The Responses WebSocket relay parses response.create events itself and
+	// never goes through GetAndValidateResponsesRequest, so it must reach the
+	// same bound through the shared validator.
+	t.Run("responses websocket transport shares the bound", func(t *testing.T) {
+		huge := uint(18446744073686646784)
+		err := ValidateResponsesRequest(&dto.OpenAIResponsesRequest{Model: "gpt-4o", MaxOutputTokens: &huge})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "max_output_tokens is invalid")
+
+		normal := uint(8192)
+		require.NoError(t, ValidateResponsesRequest(&dto.OpenAIResponsesRequest{Model: "gpt-4o", MaxOutputTokens: &normal}))
+	})
+
+	t.Run("responses websocket transport requires model", func(t *testing.T) {
+		err := ValidateResponsesRequest(&dto.OpenAIResponsesRequest{})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "model is required")
 	})
 }
