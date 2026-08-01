@@ -2,7 +2,7 @@ package service
 
 import "github.com/QuantumNous/new-api/pkg/wsmanager"
 
-const ChannelDisabledCloseReason = "channel disabled or deleted"
+const ChannelDisabledCloseReason = wsmanager.DefaultCloseReason
 
 func CloseActiveWebSocketsForChannel(channelID int, reason string) int {
 	return wsmanager.CloseChannelsAndBroadcast([]int{channelID}, reason)

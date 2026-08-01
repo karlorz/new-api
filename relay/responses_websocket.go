@@ -238,7 +238,8 @@ func normalizeResponsesWSCreateEvent(message []byte) (responsesWSCreateRequest, 
 
 	var generate common.RawMessage
 	var raw map[string]common.RawMessage
-	if err := common.Unmarshal(message, &raw); err == nil {
+	rawErr := common.Unmarshal(message, &raw)
+	if rawErr == nil {
 		if generateRaw, ok := raw["generate"]; ok {
 			generate = generateRaw
 		}
@@ -246,15 +247,13 @@ func normalizeResponsesWSCreateEvent(message []byte) (responsesWSCreateRequest, 
 
 	payload := event.Request
 	if len(payload) == 0 {
-		if err := common.Unmarshal(message, &raw); err != nil {
-			return responsesWSCreateRequest{}, event.EventID, err
+		if rawErr != nil {
+			return responsesWSCreateRequest{}, event.EventID, rawErr
 		}
 		delete(raw, "type")
 		delete(raw, "event_id")
-		delete(raw, "background")
 		delete(raw, "generate")
-		delete(raw, "stream")
-		delete(raw, "stream_options")
+		stripResponsesWSTransportFields(raw)
 		var err error
 		payload, err = common.Marshal(raw)
 		if err != nil {
@@ -596,9 +595,7 @@ func buildResponsesWSCreateEvent(jsonData []byte, generate common.RawMessage) ([
 	}
 	event["type"] = typeData
 	delete(event, "event_id")
-	delete(event, "background")
-	delete(event, "stream")
-	delete(event, "stream_options")
+	stripResponsesWSTransportFields(event)
 	if len(generate) > 0 {
 		event["generate"] = generate
 	}
@@ -606,14 +603,18 @@ func buildResponsesWSCreateEvent(jsonData []byte, generate common.RawMessage) ([
 }
 
 func removeResponsesWSTransportFields(jsonData []byte) ([]byte, error) {
-	var data map[string]any
+	var data map[string]common.RawMessage
 	if err := common.Unmarshal(jsonData, &data); err != nil {
 		return jsonData, err
 	}
+	stripResponsesWSTransportFields(data)
+	return common.Marshal(data)
+}
+
+func stripResponsesWSTransportFields(data map[string]common.RawMessage) {
 	delete(data, "stream")
 	delete(data, "stream_options")
 	delete(data, "background")
-	return common.Marshal(data)
 }
 
 func dialResponsesWebSocketUpstream(c *gin.Context, adaptor relaychannel.Adaptor, info *relaycommon.RelayInfo) (*websocket.Conn, *types.NewAPIError) {
