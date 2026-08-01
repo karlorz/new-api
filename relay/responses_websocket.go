@@ -628,6 +628,7 @@ func dialResponsesWebSocketUpstream(c *gin.Context, adaptor relaychannel.Adaptor
 	for key, value := range headerOverride {
 		targetHeader.Set(key, value)
 	}
+	prepareResponsesWebSocketHeaders(c, &targetHeader)
 
 	targetConn, resp, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
 	if err != nil {
@@ -639,6 +640,22 @@ func dialResponsesWebSocketUpstream(c *gin.Context, adaptor relaychannel.Adaptor
 	}
 	targetConn.SetReadLimit(responsesWSMaxMessageBytes())
 	return targetConn, nil
+}
+
+// prepareResponsesWebSocketHeaders removes HTTP/SSE negotiation that may have
+// been inferred from RelayInfo.IsStream and preserves the client's Responses
+// WebSocket beta contract for the upstream handshake.
+func prepareResponsesWebSocketHeaders(c *gin.Context, header *http.Header) {
+	if header == nil {
+		return
+	}
+	header.Del("Accept")
+	if c == nil || c.Request == nil {
+		return
+	}
+	if beta := strings.TrimSpace(c.Request.Header.Get("OpenAI-Beta")); beta != "" {
+		header.Set("OpenAI-Beta", beta)
+	}
 }
 
 func toWebSocketURL(raw string) string {

@@ -230,6 +230,35 @@ func TestToWebSocketURL(t *testing.T) {
 	}
 }
 
+func TestPrepareResponsesWebSocketHeaders(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set("OpenAI-Beta", "responses_websockets=2026-02-06")
+	header := http.Header{
+		"Accept":       []string{"text/event-stream"},
+		"Content-Type": []string{"application/json"},
+	}
+
+	prepareResponsesWebSocketHeaders(c, &header)
+
+	assert.Empty(t, header.Get("Accept"), "SSE Accept must not leak into a WebSocket handshake")
+	assert.Equal(t, "application/json", header.Get("Content-Type"))
+	assert.Equal(t, "responses_websockets=2026-02-06", header.Get("OpenAI-Beta"))
+}
+
+func TestPrepareResponsesWebSocketHeadersWithoutClientBetaPreservesAdaptorBeta(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	header := http.Header{}
+	header.Set("Accept", "text/event-stream")
+	header.Set("OpenAI-Beta", "responses=experimental")
+
+	prepareResponsesWebSocketHeaders(c, &header)
+
+	assert.Empty(t, header.Get("Accept"))
+	assert.Equal(t, "responses=experimental", header.Get("OpenAI-Beta"))
+}
+
 func TestHandleTargetWriteFailureWithStateReleasesCurrentAndClearsTarget(t *testing.T) {
 	target, cleanup := newTestResponsesWSTarget(t)
 	defer cleanup()
