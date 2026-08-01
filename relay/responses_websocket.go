@@ -490,6 +490,7 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 	// WebSocket delivery is inherently incremental; mark it streaming like the
 	// realtime relay does.
 	relayInfo.IsStream = true
+	relayInfo.ClientWs = s.client
 	s.c.Set(string(appconstant.ContextKeyIsStream), true)
 	relayInfo.RequestId = fmt.Sprintf("%s-ws-%d", relayInfo.RequestId, s.nextEventIndex)
 	s.nextEventIndex++
