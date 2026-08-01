@@ -144,10 +144,7 @@ function renderType(type, t) {
 
 function buildStreamStatusTooltip(ss, t) {
   if (!ss) return null;
-  const lines = [
-    t('流状态') + '：' + t('异常'),
-    (ss.end_reason || 'unknown'),
-  ];
+  const lines = [t('流状态') + '：' + t('异常'), ss.end_reason || 'unknown'];
   if (ss.error_count > 0) {
     lines.push(`${t('软错误')}: ${ss.error_count}`);
   }
@@ -163,14 +160,14 @@ function buildStreamStatusTooltip(ss, t) {
   );
 }
 
-function renderIsStream(bool, t, streamStatus) {
+function renderIsStream(bool, t, streamStatus, isWebSocket = false) {
   const isError = streamStatus && streamStatus.status !== 'ok';
 
   if (bool) {
     return (
       <span style={{ position: 'relative', display: 'inline-block' }}>
         <Tag color='blue' shape='circle'>
-          {t('流')}
+          {isWebSocket ? t('WebSocket') : t('流')}
         </Tag>
         {isError && (
           <Tooltip content={buildStreamStatusTooltip(streamStatus, t)}>
@@ -185,11 +182,7 @@ function renderIsStream(bool, t, streamStatus) {
                 userSelect: 'none',
               }}
             >
-              <CircleAlert
-                size={14}
-                strokeWidth={2.5}
-                color='currentColor'
-              />
+              <CircleAlert size={14} strokeWidth={2.5} color='currentColor' />
             </span>
           </Tooltip>
         )}
@@ -461,7 +454,11 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
     };
   }
 
-  const summaryOpts = { ...other, displayMode: billingDisplayMode, outputMode: 'segments' };
+  const summaryOpts = {
+    ...other,
+    displayMode: billingDisplayMode,
+    outputMode: 'segments',
+  };
 
   if (other?.billing_mode === 'tiered_expr') {
     return { segments: renderTieredModelPriceSimple(summaryOpts) };
@@ -709,7 +706,12 @@ export const getLogsColumns = ({
               <Space>
                 {renderUseTime(text, t)}
                 {renderFirstUseTime(other?.frt, t)}
-                {renderIsStream(record.is_stream, t, other?.stream_status)}
+                {renderIsStream(
+                  record.is_stream,
+                  t,
+                  other?.stream_status,
+                  other?.ws === true,
+                )}
               </Space>
             </>
           );
