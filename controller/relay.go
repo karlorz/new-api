@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/samber/lo"
@@ -264,9 +266,47 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 // bomb hole that MAX_REQUEST_BODY_MB exists to close on the HTTP side.
 var upgrader = websocket.Upgrader{
 	Subprotocols: []string{"realtime", "responses"}, // WS 握手支持的协议，如果有使用 Sec-WebSocket-Protocol，则必须在此声明对应的 Protocol
-	CheckOrigin: func(r *http.Request) bool {
-		return true // 允许跨域
-	},
+	CheckOrigin:  isAllowedWebSocketOrigin,
+}
+
+// isAllowedWebSocketOrigin keeps authenticated CLI clients compatible while
+// preventing a browser on an unrelated site from opening a credential-bearing
+// relay socket. CLI clients such as Codex normally omit Origin. When a browser
+// supplies it, require an exact normalized match against the request host, the
+// configured server address, or the existing trusted browser-origin list.
+func isAllowedWebSocketOrigin(request *http.Request) bool {
+	if request == nil {
+		return false
+	}
+	originValues := request.Header.Values("Origin")
+	if len(originValues) == 0 {
+		return true
+	}
+	if len(originValues) != 1 || strings.Contains(originValues[0], ",") {
+		return false
+	}
+	origin, err := common.NormalizeOrigin(originValues[0])
+	if err != nil {
+		return false
+	}
+
+	allowedOrigins := make([]string, 0, 3+len(common.SessionCookieTrustedURLs))
+	for _, candidate := range []string{
+		"http://" + request.Host,
+		"https://" + request.Host,
+		system_setting.ServerAddress,
+	} {
+		if normalized, normalizeErr := common.NormalizeOrigin(candidate); normalizeErr == nil {
+			allowedOrigins = append(allowedOrigins, normalized)
+		}
+	}
+	allowedOrigins = append(allowedOrigins, common.SessionCookieTrustedURLs...)
+	for _, allowedOrigin := range allowedOrigins {
+		if subtle.ConstantTimeCompare([]byte(origin), []byte(allowedOrigin)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func addUsedChannel(c *gin.Context, channelId int) {
