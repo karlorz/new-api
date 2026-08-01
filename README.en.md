@@ -176,6 +176,7 @@ docker run --name new-api -d --restart always \
 | 🚀 Deployment Guide | [Installation Documentation](https://docs.newapi.pro/en/docs/installation) |
 | ⚙️ Environment Configuration | [Environment Variables](https://docs.newapi.pro/en/docs/installation/config-maintenance/environment-variables) |
 | 📡 API Documentation | [API Documentation](https://docs.newapi.pro/en/docs/api) |
+| 🔌 Fork Compatibility | [Codex Responses WebSocket fork status and upstream migration](./docs/responses-websocket-tracking.md) |
 | ❓ FAQ | [FAQ](https://docs.newapi.pro/en/docs/support/faq) |
 | 💬 Community Interaction | [Communication Channels](https://docs.newapi.pro/en/docs/support/community-interaction) |
 
