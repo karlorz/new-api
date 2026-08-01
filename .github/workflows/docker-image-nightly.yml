@@ -13,6 +13,8 @@ on:
 jobs:
   build_single_arch:
     name: Build & push (${{ matrix.arch }}) [native]
+    # Fork branch images are published explicitly by docker-image-branch.yml.
+    if: github.repository == 'Calcium-Ion/new-api'
     strategy:
       fail-fast: false
       matrix:

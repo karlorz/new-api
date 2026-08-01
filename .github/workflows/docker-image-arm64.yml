@@ -15,6 +15,10 @@ on:
 jobs:
   build_single_arch:
     name: Build & push (${{ matrix.arch }}) [native]
+    # Preserve the upstream legacy publisher for its original repository, but
+    # never publish calciumion/new-api from this fork. Fork releases use
+    # docker-build.yml and the karlorz namespaces instead.
+    if: github.repository == 'Calcium-Ion/new-api'
     strategy:
       fail-fast: false
       matrix:
