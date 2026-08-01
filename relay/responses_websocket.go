@@ -908,11 +908,6 @@ func (s *responsesWSSession) getTarget() *websocket.Conn {
 	return s.target
 }
 
-func (s *responsesWSSession) isTarget(target *websocket.Conn) bool {
-	s.targetMu.Lock()
-	defer s.targetMu.Unlock()
-	return target != nil && s.target == target
-}
 func (s *responsesWSSession) setTarget(target *websocket.Conn) {
 	s.targetMu.Lock()
 	defer s.targetMu.Unlock()
