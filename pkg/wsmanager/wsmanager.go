@@ -15,7 +15,7 @@ const (
 	KindRealtime  = "realtime"
 	KindResponses = "responses"
 
-	defaultCloseReason = "channel disabled or deleted"
+	DefaultCloseReason = "channel disabled or deleted"
 	redisChannel       = "new-api:wsmanager:channel-close"
 )
 
@@ -224,7 +224,7 @@ func uniqueChannelIDs(channelIDs []int) []int {
 
 func normalizeReason(reason string) string {
 	if reason == "" {
-		return defaultCloseReason
+		return DefaultCloseReason
 	}
 	return reason
 }
