@@ -1,20 +1,66 @@
-name: Publish Docker image (Multi-arch)
+name: Publish fork release images
 
 on:
   push:
     tags:
-      - '*'
-      - '!nightly*'
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag name to build (e.g., v0.10.8-alpha.3)'
+        description: 'Existing fork release tag, for example v1.0.0-rc.23-0'
         required: true
         type: string
 
+env:
+  DOCKERHUB_IMAGE: karlorz/new-api
+  GHCR_IMAGE: ghcr.io/karlorz/new-api
+
 jobs:
+  prepare:
+    name: Validate fork release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      publish_latest: ${{ steps.release.outputs.publish_latest }}
+      sha: ${{ steps.release.outputs.sha }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Validate tag and resolve release metadata
+        id: release
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          scripts/validate-fork-release-tag.sh "$REQUESTED_TAG"
+          if ! git rev-parse --verify "refs/tags/$REQUESTED_TAG^{commit}" >/dev/null 2>&1; then
+            echo "::error::Tag '$REQUESTED_TAG' does not exist"
+            exit 1
+          fi
+          TAG_SHA=$(git rev-list -n 1 "$REQUESTED_TAG")
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+            echo "::error::Checked out commit $HEAD_SHA does not match tag $REQUESTED_TAG at $TAG_SHA"
+            exit 1
+          fi
+          PUBLISH_LATEST=false
+          case "$REQUESTED_TAG" in
+            v1.*) PUBLISH_LATEST=true ;;
+          esac
+          {
+            echo "tag=$REQUESTED_TAG"
+            echo "publish_latest=$PUBLISH_LATEST"
+            echo "sha=$HEAD_SHA"
+          } >> "$GITHUB_OUTPUT"
+
   build_single_arch:
-    name: Build & push (${{ matrix.arch }})
+    name: Build and push ${{ matrix.arch }}
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -26,37 +72,21 @@ jobs:
             platform: linux/arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    outputs:
-      tag: ${{ steps.version.outputs.tag }}
-
     permissions:
-      packages: write
       contents: read
+      packages: write
       id-token: write
-
     steps:
-      - name: Check out
+      - name: Check out release commit
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          fetch-depth: ${{ github.event_name == 'workflow_dispatch' && 0 || 1 }}
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 1
+          ref: ${{ needs.prepare.outputs.sha }}
 
-      - name: Resolve tag & write VERSION
-        id: version
-        run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-            if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
-              echo "::error::Tag '$TAG' does not exist"
-              exit 1
-            fi
-          else
-            TAG=${GITHUB_REF#refs/tags/}
-          fi
-          echo "TAG=${TAG}" >> $GITHUB_ENV
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "${TAG}" > VERSION
-          echo "Building tag: ${TAG} for ${{ matrix.arch }}"
+      - name: Write release version
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: echo "$RELEASE_TAG" > VERSION
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -67,86 +97,139 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata (labels)
+      - name: Log in to GHCR
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tags
+        id: tags
+        env:
+          ARCH: ${{ matrix.arch }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          PUBLISH_LATEST: ${{ needs.prepare.outputs.publish_latest }}
+        run: |
+          {
+            echo 'value<<EOF'
+            echo "$DOCKERHUB_IMAGE:$RELEASE_TAG-$ARCH"
+            echo "$GHCR_IMAGE:$RELEASE_TAG-$ARCH"
+            if [ "$PUBLISH_LATEST" = true ]; then
+              echo "$DOCKERHUB_IMAGE:latest-$ARCH"
+              echo "$GHCR_IMAGE:latest-$ARCH"
+            fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Extract OCI labels
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: calciumion/new-api
+          images: |
+            ${{ env.DOCKERHUB_IMAGE }}
+            ${{ env.GHCR_IMAGE }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.tag }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.sha }}
 
-      - name: Build & push
+      - name: Build and push architecture image
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           platforms: ${{ matrix.platform }}
           push: true
-          tags: |
-            calciumion/new-api:${{ env.TAG }}-${{ matrix.arch }}
-            calciumion/new-api:latest-${{ matrix.arch }}
+          tags: ${{ steps.tags.outputs.value }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=release-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.arch }}
           provenance: mode=max
           sbom: true
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Sign image with cosign
-        run: cosign sign --yes calciumion/new-api@${{ steps.build.outputs.digest }}
-
-      - name: Image summary
+      - name: Sign architecture images
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          echo "### Docker Image Digest (${{ matrix.arch }})" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "calciumion/new-api:${TAG}-${{ matrix.arch }}" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          cosign sign --yes "$DOCKERHUB_IMAGE@$DIGEST"
+          cosign sign --yes "$GHCR_IMAGE@$DIGEST"
 
   create_manifests:
-    name: Create multi-arch manifests
-    needs: [build_single_arch]
+    name: Create multi-architecture manifests
+    needs: [prepare, build_single_arch]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-
     permissions:
+      contents: read
+      packages: write
       id-token: write
-
     steps:
-      - name: Set version
-        run: echo "TAG=${{ needs.build_single_arch.outputs.tag }}" >> $GITHUB_ENV
-
       - name: Log in to Docker Hub
         uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Create & push manifest (version)
-        run: |
-          docker buildx imagetools create \
-            -t calciumion/new-api:${TAG} \
-            calciumion/new-api:${TAG}-amd64 \
-            calciumion/new-api:${TAG}-arm64
+      - name: Log in to GHCR
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create & push manifest (latest)
+      - name: Create immutable manifests
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           docker buildx imagetools create \
-            -t calciumion/new-api:latest \
-            calciumion/new-api:latest-amd64 \
-            calciumion/new-api:latest-arm64
+            -t "$DOCKERHUB_IMAGE:$RELEASE_TAG" \
+            "$DOCKERHUB_IMAGE:$RELEASE_TAG-amd64" \
+            "$DOCKERHUB_IMAGE:$RELEASE_TAG-arm64"
+          docker buildx imagetools create \
+            -t "$GHCR_IMAGE:$RELEASE_TAG" \
+            "$GHCR_IMAGE:$RELEASE_TAG-amd64" \
+            "$GHCR_IMAGE:$RELEASE_TAG-arm64"
+
+      - name: Create current-line latest manifests
+        if: needs.prepare.outputs.publish_latest == 'true'
+        run: |
+          docker buildx imagetools create \
+            -t "$DOCKERHUB_IMAGE:latest" \
+            "$DOCKERHUB_IMAGE:latest-amd64" \
+            "$DOCKERHUB_IMAGE:latest-arm64"
+          docker buildx imagetools create \
+            -t "$GHCR_IMAGE:latest" \
+            "$GHCR_IMAGE:latest-amd64" \
+            "$GHCR_IMAGE:latest-arm64"
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Sign manifests with cosign
+      - name: Sign manifests
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          PUBLISH_LATEST: ${{ needs.prepare.outputs.publish_latest }}
         run: |
-          cosign sign --yes calciumion/new-api:${TAG}
-          cosign sign --yes calciumion/new-api:latest
+          cosign sign --yes "$DOCKERHUB_IMAGE:$RELEASE_TAG"
+          cosign sign --yes "$GHCR_IMAGE:$RELEASE_TAG"
+          if [ "$PUBLISH_LATEST" = true ]; then
+            cosign sign --yes "$DOCKERHUB_IMAGE:latest"
+            cosign sign --yes "$GHCR_IMAGE:latest"
+          fi
 
-      - name: Manifest summary
+      - name: Release summary
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          echo "### Multi-arch Manifest" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          docker buildx imagetools inspect calciumion/new-api:${TAG} >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          {
+            echo '### Published fork images'
+            echo
+            echo "- $DOCKERHUB_IMAGE:$RELEASE_TAG"
+            echo "- $GHCR_IMAGE:$RELEASE_TAG"
+            if [ '${{ needs.prepare.outputs.publish_latest }}' = true ]; then
+              echo "- $DOCKERHUB_IMAGE:latest"
+              echo "- $GHCR_IMAGE:latest"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
