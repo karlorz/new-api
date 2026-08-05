@@ -687,13 +687,6 @@ func (s *responsesWSSession) startTargetReader() {
 				_ = s.client.Close()
 				return
 			}
-			s.observeUpstreamMessage(message)
-			if err := s.writeClient(messageType, message); err != nil {
-				logger.LogError(s.c, "responses websocket client write failed: "+err.Error())
-				s.settleCurrent()
-				s.closeTarget()
-				return
-			}
 			// Upstream traffic also counts as activity: a long generation can
 			// stream for minutes while the client only listens, and that must
 			// not trip the client idle timeout.
@@ -704,8 +697,34 @@ func (s *responsesWSSession) startTargetReader() {
 			// net.Conn.SetReadDeadline (conn.go:1105), which is documented to be
 			// callable concurrently with a blocked Read.
 			_ = relaycommon.RefreshClientWebSocketReadDeadline(s.client)
+
+			// Drop transport-only keepalives (e.g. from CLI API proxies). Strict
+			// clients reject unknown event.type variants and abort the turn.
+			if isResponsesWSTransportKeepalive(message) {
+				continue
+			}
+
+			s.observeUpstreamMessage(message)
+			if err := s.writeClient(messageType, message); err != nil {
+				logger.LogError(s.c, "responses websocket client write failed: "+err.Error())
+				s.settleCurrent()
+				s.closeTarget()
+				return
+			}
 		}
 	}()
+}
+
+// isResponsesWSTransportKeepalive peeks at event.type without full parsing so
+// the reader can drop non-semantic frames before billing observation/forwarding.
+func isResponsesWSTransportKeepalive(message []byte) bool {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if err := common.Unmarshal(message, &envelope); err != nil {
+		return false
+	}
+	return dto.IsResponsesTransportEventType(envelope.Type)
 }
 
 func (s *responsesWSSession) observeUpstreamMessage(message []byte) {

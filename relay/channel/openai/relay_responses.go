@@ -83,6 +83,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Error(err)
 			return
 		}
+		// Drop transport-only keepalives from upstream proxies. Strict clients
+		// (serde enums, etc.) fail the whole stream on unknown event types.
+		if dto.IsResponsesTransportEventType(streamResponse.Type) {
+			return
+		}
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
 		case "response.completed":

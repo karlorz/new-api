@@ -438,6 +438,66 @@ func TestObserveUpstreamFailedReleasesCurrent(t *testing.T) {
 	}
 }
 
+func TestIsResponsesWSTransportKeepalive(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{name: "keepalive", message: `{"type":"keepalive"}`, want: true},
+		{name: "keep_alive with fields", message: `{"type":"keep_alive","ts":1}`, want: true},
+		{name: "heartbeat", message: `{"type":"heartbeat"}`, want: true},
+		{name: "response delta", message: `{"type":"response.output_text.delta","delta":"hi"}`, want: false},
+		{name: "invalid json", message: `not-json`, want: false},
+		{name: "missing type", message: `{"delta":"x"}`, want: false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isResponsesWSTransportKeepalive([]byte(tc.message)); got != tc.want {
+				t.Fatalf("isResponsesWSTransportKeepalive(%s) = %v, want %v", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStartTargetReaderDropsKeepalive(t *testing.T) {
+	clientSide, clientServer, cleanupClient := newTestWebSocketPair(t)
+	defer cleanupClient()
+	targetSide, targetServer, cleanupTarget := newTestWebSocketPair(t)
+	defer cleanupTarget()
+
+	// Session reads from targetSide (as if connected to upstream) and writes to clientServer.
+	session := &responsesWSSession{
+		c:      &gin.Context{},
+		client: clientServer,
+		target: targetSide,
+	}
+	session.startTargetReader()
+
+	// Upstream injects a transport keepalive then a real event.
+	require.NoError(t, targetServer.WriteMessage(websocket.TextMessage, []byte(`{"type":"keepalive"}`)))
+	require.NoError(t, targetServer.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.created"}`)))
+
+	// Client must only receive the semantic event.
+	_ = clientSide.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, message, err := clientSide.ReadMessage()
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"response.created"}`, string(message))
+
+	// Ensure no extra keepalive frame is waiting.
+	_ = clientSide.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	_, _, err = clientSide.ReadMessage()
+	require.Error(t, err, "client must not receive a second message after keepalive was dropped")
+
+	session.closeTarget()
+	_ = clientServer.Close()
+}
+
 func newTestResponsesWSTarget(t *testing.T) (*websocket.Conn, func()) {
 	t.Helper()
 	target, _, cleanup := newTestWebSocketPair(t)

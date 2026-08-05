@@ -308,6 +308,11 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Error(err)
 			return
 		}
+		// Ignore transport keepalives from upstream proxies; they are not
+		// mappable to chat.completion.chunk events.
+		if dto.IsResponsesTransportEventType(streamResp.Type) {
+			return
+		}
 
 		switch streamResp.Type {
 		case "response.created":

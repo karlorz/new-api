@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/types"
@@ -402,6 +403,19 @@ type ResponsesStreamResponse struct {
 	SummaryIndex *int                           `json:"summary_index,omitempty"`
 	ItemID       string                         `json:"item_id,omitempty"`
 	Part         *ResponsesReasoningSummaryPart `json:"part,omitempty"`
+}
+
+// IsResponsesTransportEventType reports non-semantic frames that some upstream
+// proxies or CLI gateways inject to keep long Responses streams/sockets open.
+// These are not part of the OpenAI Responses streaming event model and break
+// clients that deserialize event types into a closed enum (e.g. serde).
+func IsResponsesTransportEventType(eventType string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case "keepalive", "keep_alive", "heartbeat":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构

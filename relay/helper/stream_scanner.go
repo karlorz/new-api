@@ -104,7 +104,8 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			logger.LogError(c, "timeout waiting for goroutines to exit")
 		}
 
-		close(stopChan)
+		// stopChan is intentionally left open after all workers are drained.
+		// Worker cleanup sends are allowed to complete after wg.Done().
 	}()
 
 	scanner.Buffer(make([]byte, InitialScannerBufferSize), getScannerBufferSize())
