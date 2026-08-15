@@ -69,6 +69,12 @@ func ShouldPreserveThinkingSuffix(modelName string) bool {
 	if target == "" {
 		return false
 	}
+	// gemini-3.7-flash-high is a canonical native Gemini model name; its
+	// trailing -high is not the legacy effort suffix and must reach upstream
+	// unchanged even when the global adapter is enabled.
+	if target == "gemini-3.7-flash-high" {
+		return true
+	}
 
 	for _, entry := range globalSettings.ThinkingModelBlacklist {
 		if strings.TrimSpace(entry) == target {
