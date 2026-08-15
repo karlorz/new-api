@@ -44,9 +44,9 @@ func (r *GeminiChatRequest) UnmarshalJSON(data []byte) error {
 }
 
 type ToolConfig struct {
-	FunctionCallingConfig *FunctionCallingConfig `json:"functionCallingConfig,omitempty"`
-	RetrievalConfig       *RetrievalConfig       `json:"retrievalConfig,omitempty"`
-	IncludeServerSideToolInvocations *bool       `json:"includeServerSideToolInvocations,omitempty"`
+	FunctionCallingConfig            *FunctionCallingConfig `json:"functionCallingConfig,omitempty"`
+	RetrievalConfig                  *RetrievalConfig       `json:"retrievalConfig,omitempty"`
+	IncludeServerSideToolInvocations *bool                  `json:"includeServerSideToolInvocations,omitempty"`
 }
 
 type FunctionCallingConfig struct {
@@ -160,10 +160,9 @@ func (r *GeminiChatRequest) SetTools(tools []GeminiChatTool) {
 }
 
 type GeminiThinkingConfig struct {
-	IncludeThoughts bool `json:"includeThoughts,omitempty"`
-	ThinkingBudget  *int `json:"thinkingBudget,omitempty"`
-	// TODO Conflict with thinkingbudget.
-	ThinkingLevel string `json:"thinkingLevel,omitempty"`
+	IncludeThoughts *bool   `json:"includeThoughts,omitempty"`
+	ThinkingBudget  *int    `json:"thinkingBudget,omitempty"`
+	ThinkingLevel   *string `json:"thinkingLevel,omitempty"`
 }
 
 // UnmarshalJSON allows GeminiThinkingConfig to accept both snake_case and camelCase fields.
@@ -171,9 +170,9 @@ func (c *GeminiThinkingConfig) UnmarshalJSON(data []byte) error {
 	type Alias GeminiThinkingConfig
 	var aux struct {
 		Alias
-		IncludeThoughtsSnake *bool  `json:"include_thoughts,omitempty"`
-		ThinkingBudgetSnake  *int   `json:"thinking_budget,omitempty"`
-		ThinkingLevelSnake   string `json:"thinking_level,omitempty"`
+		IncludeThoughtsSnake *bool   `json:"include_thoughts,omitempty"`
+		ThinkingBudgetSnake  *int    `json:"thinking_budget,omitempty"`
+		ThinkingLevelSnake   *string `json:"thinking_level,omitempty"`
 	}
 
 	if err := common.Unmarshal(data, &aux); err != nil {
@@ -183,14 +182,14 @@ func (c *GeminiThinkingConfig) UnmarshalJSON(data []byte) error {
 	*c = GeminiThinkingConfig(aux.Alias)
 
 	if aux.IncludeThoughtsSnake != nil {
-		c.IncludeThoughts = *aux.IncludeThoughtsSnake
+		c.IncludeThoughts = aux.IncludeThoughtsSnake
 	}
 
 	if aux.ThinkingBudgetSnake != nil {
 		c.ThinkingBudget = aux.ThinkingBudgetSnake
 	}
 
-	if aux.ThinkingLevelSnake != "" {
+	if aux.ThinkingLevelSnake != nil {
 		c.ThinkingLevel = aux.ThinkingLevelSnake
 	}
 

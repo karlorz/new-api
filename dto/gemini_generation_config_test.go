@@ -87,3 +87,30 @@ func TestGeminiChatGenerationConfigPreservesExplicitZeroValuesSnakeCase(t *testi
 	assert.Equal(t, float64(0), generationConfig["seed"])
 	assert.Equal(t, false, generationConfig["responseLogprobs"])
 }
+
+func TestGeminiThinkingConfigPreservesExplicitFalseAndEmptyLevel(t *testing.T) {
+	raw := []byte(`{
+		"contents":[{"role":"user","parts":[{"text":"hello"}]}],
+		"generationConfig":{"thinkingConfig":{"includeThoughts":false,"thinkingLevel":""}}
+	}`)
+
+	var req GeminiChatRequest
+	require.NoError(t, common.Unmarshal(raw, &req))
+	require.NotNil(t, req.GenerationConfig.ThinkingConfig)
+	require.NotNil(t, req.GenerationConfig.ThinkingConfig.IncludeThoughts)
+	require.NotNil(t, req.GenerationConfig.ThinkingConfig.ThinkingLevel)
+	assert.False(t, *req.GenerationConfig.ThinkingConfig.IncludeThoughts)
+	assert.Equal(t, "", *req.GenerationConfig.ThinkingConfig.ThinkingLevel)
+
+	encoded, err := common.Marshal(req)
+	require.NoError(t, err)
+
+	var out map[string]any
+	require.NoError(t, common.Unmarshal(encoded, &out))
+	generationConfig, ok := out["generationConfig"].(map[string]any)
+	require.True(t, ok)
+	thinkingConfig, ok := generationConfig["thinkingConfig"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, thinkingConfig["includeThoughts"])
+	assert.Equal(t, "", thinkingConfig["thinkingLevel"])
+}

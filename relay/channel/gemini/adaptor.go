@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
@@ -21,6 +22,41 @@ import (
 )
 
 type Adaptor struct {
+}
+
+// resolveClaudeThinkingConfig translates only Claude-native thinking controls.
+// It deliberately lives in the Gemini adaptor so the generic Claude-to-OpenAI
+// conversion remains provider-neutral.
+func resolveClaudeThinkingConfig(req *dto.ClaudeRequest) (*dto.GeminiThinkingConfig, string) {
+	if req.Thinking != nil && req.Thinking.Type == "disabled" {
+		return &dto.GeminiThinkingConfig{IncludeThoughts: common.GetPointer(false)}, ""
+	}
+
+	if len(req.OutputConfig) > 0 {
+		if effort := req.GetEfforts(); effort != "" {
+			return &dto.GeminiThinkingConfig{
+				IncludeThoughts: common.GetPointer(true),
+				ThinkingLevel:   common.GetPointer(effort),
+			}, effort
+		}
+	}
+
+	if req.Thinking == nil {
+		return nil, ""
+	}
+
+	switch req.Thinking.Type {
+	case "enabled":
+		config := &dto.GeminiThinkingConfig{IncludeThoughts: common.GetPointer(true)}
+		if req.Thinking.BudgetTokens != nil {
+			config.ThinkingBudget = req.Thinking.BudgetTokens
+		}
+		return config, ""
+	case "adaptive":
+		return &dto.GeminiThinkingConfig{IncludeThoughts: common.GetPointer(true)}, ""
+	default:
+		return nil, ""
+	}
 }
 
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
@@ -49,7 +85,19 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
-	return a.ConvertOpenAIRequest(c, info, oaiReq.(*dto.GeneralOpenAIRequest))
+	converted, err := a.ConvertOpenAIRequest(c, info, oaiReq.(*dto.GeneralOpenAIRequest))
+	if err != nil {
+		return nil, err
+	}
+	geminiRequest, ok := converted.(*dto.GeminiChatRequest)
+	if !ok {
+		return converted, nil
+	}
+	if config, effort := resolveClaudeThinkingConfig(req); config != nil {
+		geminiRequest.GenerationConfig.ThinkingConfig = config
+		info.ReasoningEffort = effort
+	}
+	return geminiRequest, nil
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
@@ -129,8 +177,7 @@ func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
-	if model_setting.GetGeminiSettings().ThinkingAdapterEnabled &&
-		!model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+	if shouldApplyGeminiThinkingAdapter(info) {
 		// 新增逻辑：处理 -thinking-<budget> 格式
 		if strings.Contains(info.UpstreamModelName, "-thinking-") {
 			parts := strings.Split(info.UpstreamModelName, "-thinking-")
