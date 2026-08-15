@@ -11,7 +11,7 @@ conditions required to replace it with official upstream New API support.
 
 ## Status at a glance
 
-Last verified: **2026-08-02**
+Last verified: **2026-08-15**
 
 <!-- markdownlint-disable MD013 -->
 
@@ -20,7 +20,7 @@ Last verified: **2026-08-02**
 | Official upstream `GET /v1/responses` WebSocket relay | Not available in an official tagged release |
 | Upstream implementation candidate | [QuantumNous/new-api PR #5062](https://github.com/QuantumNous/new-api/pull/5062), open and conflicting as of the last verification |
 | Current fork branch | `release/responses-websocket-v1` |
-| Current fork release | [`v1.0.0-rc.23-0`](https://github.com/karlorz/new-api/releases/tag/v1.0.0-rc.23-0) |
+| Current fork release | [`v1.0.0-rc.24-0`](https://github.com/karlorz/new-api/releases/tag/v1.0.0-rc.24-0) |
 | Legacy fork branch | `release/responses-websocket-v0.13` |
 | Legacy fork release | [`v0.13.2-0`](https://github.com/karlorz/new-api/releases/tag/v0.13.2-0) |
 | Fork state | Maintained while waiting for a verified official upstream tag |
@@ -49,7 +49,8 @@ this fork. The complete release deltas are available here:
 
 <!-- markdownlint-disable MD013 -->
 
-- [Current release delta](https://github.com/karlorz/new-api/compare/v1.0.0-rc.23...v1.0.0-rc.23-0)
+- [Current release delta: `v1.0.0-rc.24...v1.0.0-rc.24-0`](https://github.com/karlorz/new-api/compare/v1.0.0-rc.24...v1.0.0-rc.24-0)
+- [Prior release delta: `v1.0.0-rc.23...v1.0.0-rc.23-0`](https://github.com/karlorz/new-api/compare/v1.0.0-rc.23...v1.0.0-rc.23-0)
 - [Legacy release delta: `v0.13.2...v0.13.2-0`](https://github.com/karlorz/new-api/compare/v0.13.2...v0.13.2-0)
 
 <!-- markdownlint-enable MD013 -->
@@ -60,7 +61,7 @@ this fork. The complete release deltas are available here:
 
 | Line | Upstream base | Fork tag | Architectures | Docker `latest` |
 | --- | --- | --- | --- | --- |
-| Current | `v1.0.0-rc.23` | `v1.0.0-rc.23-0` | `linux/amd64`, `linux/arm64` | Yes |
+| Current | `v1.0.0-rc.24` | `v1.0.0-rc.24-0` | `linux/amd64`, `linux/arm64` | Yes |
 | Legacy | `v0.13.2` | `v0.13.2-0` | `linux/amd64`, `linux/arm64` | Never |
 
 <!-- markdownlint-enable MD013 -->
@@ -316,6 +317,7 @@ release tags.
 | 2026-08-02 | Verified both release manifests as `linux/amd64` and `linux/arm64`; verified `latest` points to the current-line digest. |
 | 2026-08-02 | Operator verification observed staging health and a WebSocket-upgrade probe reaching `/v1/responses` authentication with 401 instead of 404. |
 | 2026-08-02 | Confirmed upstream PR #5062 remains open and conflicting; fork remains the maintained implementation. |
+| 2026-08-15 | Synced upstream `v1.0.0-rc.24` and `main` commits into `release/responses-websocket-v1`; prepared fork release `v1.0.0-rc.24-0`. |
 
 <!-- markdownlint-enable MD013 -->
 
