@@ -59,6 +59,7 @@ export const useLogsData = () => {
     PROMPT: 'prompt',
     COMPLETION: 'completion',
     COST: 'cost',
+    SERVICE_TIER: 'service_tier',
     RETRY: 'retry',
     IP: 'ip',
     DETAILS: 'details',
@@ -122,6 +123,7 @@ export const useLogsData = () => {
       [COLUMN_KEYS.PROMPT]: true,
       [COLUMN_KEYS.COMPLETION]: true,
       [COLUMN_KEYS.COST]: true,
+      [COLUMN_KEYS.SERVICE_TIER]: true,
       [COLUMN_KEYS.RETRY]: isAdminUser,
       [COLUMN_KEYS.IP]: true,
       [COLUMN_KEYS.DETAILS]: true,
@@ -495,6 +497,17 @@ export const useLogsData = () => {
           expandDataLocal.push({
             key: t('Reasoning Effort'),
             value: other.reasoning_effort,
+          });
+        }
+        if (other?.service_tier) {
+          const forwarded = other.service_tier_forwarded;
+          const tierLabel =
+            forwarded === false
+              ? `${other.service_tier} (${t('未透传')})`
+              : other.service_tier;
+          expandDataLocal.push({
+            key: t('服务层级'),
+            value: tierLabel,
           });
         }
         if (other?.billing_mode === 'tiered_expr' && other?.expr_b64) {

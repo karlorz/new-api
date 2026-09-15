@@ -262,6 +262,39 @@ function renderBillingTag(record, t) {
   return null;
 }
 
+function renderServiceTier(record, t) {
+  const other = getLogOther(record.other);
+  const tier = other?.service_tier;
+  if (!tier) {
+    return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
+  }
+  const lowered = String(tier).toLowerCase();
+  const color =
+    lowered === 'fast' || lowered === 'priority' ? 'orange' : 'cyan';
+  const tag = (
+    <Tag color={color} shape='circle'>
+      {tier}
+    </Tag>
+  );
+  if (other?.service_tier_forwarded === false) {
+    return (
+      <Tooltip
+        content={t(
+          '请求带了 service_tier，但渠道未开启透传，上游未收到该字段',
+        )}
+      >
+        <Space>
+          {tag}
+          <Tag color='grey' shape='circle'>
+            {t('未透传')}
+          </Tag>
+        </Space>
+      </Tooltip>
+    );
+  }
+  return tag;
+}
+
 function renderModelName(record, copyText, t) {
   let other = getLogOther(record.other);
   let modelMapped =
@@ -689,6 +722,34 @@ export const getLogsColumns = ({
         ) : (
           <></>
         );
+      },
+    },
+    {
+      key: COLUMN_KEYS.SERVICE_TIER,
+      title: (
+        <div className='flex items-center gap-1'>
+          {t('服务层级')}
+          <Tooltip
+            content={t(
+              'Codex Fast / OpenAI service_tier。旧日志没有该字段时显示为空白。未透传表示渠道关闭了 allow_service_tier。',
+            )}
+          >
+            <IconHelpCircle className='text-gray-400 cursor-help' />
+          </Tooltip>
+        </div>
+      ),
+      dataIndex: 'service_tier',
+      width: 120,
+      render: (text, record) => {
+        if (
+          record.type === 0 ||
+          record.type === 2 ||
+          record.type === 5 ||
+          record.type === 6
+        ) {
+          return renderServiceTier(record, t);
+        }
+        return <></>;
       },
     },
     {

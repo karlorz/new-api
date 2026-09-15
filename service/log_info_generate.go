@@ -82,7 +82,22 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
+	appendServiceTierInfo(ctx, relayInfo, other)
 	return other
+}
+
+func appendServiceTierInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if other == nil {
+		return
+	}
+	tier := relaycommon.ResolveRequestedServiceTier(ctx, relayInfo)
+	if tier == "" {
+		return
+	}
+	other["service_tier"] = tier
+	if !relaycommon.ServiceTierForwarded(relayInfo) {
+		other["service_tier_forwarded"] = false
+	}
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
