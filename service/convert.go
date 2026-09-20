@@ -19,6 +19,9 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 		Model:       claudeRequest.Model,
 		Temperature: claudeRequest.Temperature,
 	}
+	if claudeRequest.ServiceTier != "" {
+		openAIRequest.ServiceTier, _ = common.Marshal(claudeRequest.ServiceTier)
+	}
 	if claudeRequest.MaxTokens != nil {
 		openAIRequest.MaxTokens = lo.ToPtr(lo.FromPtr(claudeRequest.MaxTokens))
 	}

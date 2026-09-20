@@ -124,6 +124,7 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
+	relaycommon.UpdateParamOverrideServiceTier(info, jsonData)
 
 	var requestBody io.Reader = bytes.NewBuffer(jsonData)
 

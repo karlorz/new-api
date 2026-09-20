@@ -192,8 +192,27 @@ func ApplyParamOverrideWithRelayInfo(jsonData []byte, info *RelayInfo) ([]byte, 
 		} else {
 			info.ParamOverrideAudit = nil
 		}
+		info.ParamOverrideServiceTierApplied = paramOverrideTouchesPath(paramOverride, "service_tier")
+		UpdateParamOverrideServiceTier(info, []byte(result))
 	}
 	return result, nil
+}
+
+func paramOverrideTouchesPath(paramOverride map[string]interface{}, path string) bool {
+	if len(paramOverride) == 0 || path == "" {
+		return false
+	}
+	if operations, ok := tryParseOperations(paramOverride); ok {
+		for _, operation := range operations {
+			if strings.TrimSpace(operation.Path) == path || strings.TrimSpace(operation.From) == path || strings.TrimSpace(operation.To) == path || strings.TrimPrefix(strings.TrimSpace(operation.To), "json:") == path {
+				return true
+			}
+		}
+		_, exists := buildLegacyParamOverride(paramOverride)[path]
+		return exists
+	}
+	_, exists := paramOverride[path]
+	return exists
 }
 
 func shouldEnableParamOverrideAudit(paramOverride map[string]interface{}) bool {

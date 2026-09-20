@@ -2141,6 +2141,57 @@ func TestApplyParamOverrideWithRelayInfoRecordsOperationAuditInDebugMode(t *test
 	}
 }
 
+func TestApplyParamOverrideWithRelayInfoRecordsServiceTierForUsageLogs(t *testing.T) {
+	info := &RelayInfo{
+		ChannelMeta: &ChannelMeta{
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"mode":  "set",
+						"path":  "service_tier",
+						"value": "fast",
+					},
+				},
+			},
+		},
+	}
+
+	_, err := ApplyParamOverrideWithRelayInfo([]byte(`{"model":"gpt-5.6"}`), info)
+	if err != nil {
+		t.Fatalf("ApplyParamOverrideWithRelayInfo returned error: %v", err)
+	}
+	if info.ParamOverrideServiceTier != "fast" {
+		t.Fatalf("expected overridden service tier fast, got %q", info.ParamOverrideServiceTier)
+	}
+	if !info.ParamOverrideServiceTierApplied {
+		t.Fatal("expected service tier override to be marked as applied")
+	}
+}
+
+func TestApplyParamOverrideWithRelayInfoRecordsServiceTierRemoval(t *testing.T) {
+	info := &RelayInfo{
+		ChannelMeta: &ChannelMeta{
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"mode": "delete",
+						"path": "service_tier",
+					},
+				},
+			},
+		},
+	}
+
+	out, err := ApplyParamOverrideWithRelayInfo([]byte(`{"model":"gpt-5.6","service_tier":"fast"}`), info)
+	if err != nil {
+		t.Fatalf("ApplyParamOverrideWithRelayInfo returned error: %v", err)
+	}
+	assertJSONEqual(t, `{"model":"gpt-5.6"}`, string(out))
+	if !info.ParamOverrideServiceTierApplied || info.ParamOverrideServiceTier != "" {
+		t.Fatalf("expected explicit service tier removal, got applied=%v tier=%q", info.ParamOverrideServiceTierApplied, info.ParamOverrideServiceTier)
+	}
+}
+
 func TestApplyParamOverrideWithRelayInfoRecordsOnlyKeyOperationsWhenDebugDisabled(t *testing.T) {
 	originalDebugEnabled := common2.DebugEnabled
 	common2.DebugEnabled = false

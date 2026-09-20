@@ -57,6 +57,9 @@ func ServiceTierFromRequest(request dto.Request) string {
 // service_tier still appears in usage logs.
 func ResolveRequestedServiceTier(ctx *gin.Context, info *RelayInfo) string {
 	if info != nil {
+		if info.ParamOverrideServiceTierApplied {
+			return info.ParamOverrideServiceTier
+		}
 		if tier := ServiceTierFromRequest(info.Request); tier != "" {
 			return tier
 		}
@@ -80,12 +83,23 @@ func ResolveRequestedServiceTier(ctx *gin.Context, info *RelayInfo) string {
 	return PeekJSONServiceTier(body)
 }
 
-// ServiceTierForwarded reports whether the channel/global passthrough would
-// keep service_tier on the upstream request. It does not inspect the bytes
-// actually sent after later param overrides.
+// ServiceTierForwarded reports whether service_tier is expected to be present
+// in the upstream request, including values added by parameter overrides.
+func UpdateParamOverrideServiceTier(info *RelayInfo, finalBody []byte) {
+	if info == nil || !info.ParamOverrideServiceTierApplied {
+		return
+	}
+	info.ParamOverrideServiceTier = PeekJSONServiceTier(finalBody)
+}
+
 func ServiceTierForwarded(info *RelayInfo) bool {
 	if info == nil {
 		return false
+	}
+	// Parameter overrides are applied after disabled fields are removed, so a
+	// service_tier found in the final body is part of the upstream request.
+	if info.ParamOverrideServiceTierApplied {
+		return info.ParamOverrideServiceTier != ""
 	}
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled {
 		return true

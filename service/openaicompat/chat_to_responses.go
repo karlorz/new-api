@@ -11,6 +11,17 @@ import (
 	"github.com/samber/lo"
 )
 
+func normalizeServiceTier(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var tier string
+	if err := common.Unmarshal(raw, &tier); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(tier)
+}
+
 func normalizeChatImageURLToString(v any) any {
 	switch vv := v.(type) {
 	case string:
@@ -386,6 +397,7 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		ParallelToolCalls: parallelToolCallsRaw,
 		Store:             req.Store,
 		Metadata:          req.Metadata,
+		ServiceTier:       normalizeServiceTier(req.ServiceTier),
 	}
 	if req.MaxTokens != nil || req.MaxCompletionTokens != nil {
 		out.MaxOutputTokens = lo.ToPtr(maxOutputTokens)

@@ -152,6 +152,10 @@ type RelayInfo struct {
 	RuntimeHeadersOverride                map[string]interface{}
 	UseRuntimeHeadersOverride             bool
 	ParamOverrideAudit                    []string
+	// ParamOverrideServiceTier records the service_tier present after parameter
+	// overrides. Applied distinguishes an explicit removal from no override.
+	ParamOverrideServiceTier        string
+	ParamOverrideServiceTierApplied bool
 
 	PriceData types.PriceData
 
@@ -181,6 +185,8 @@ type RelayInfo struct {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	info.ParamOverrideServiceTier = ""
+	info.ParamOverrideServiceTierApplied = false
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)

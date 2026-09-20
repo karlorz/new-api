@@ -30,6 +30,20 @@ func TestServiceTierFromRequest(t *testing.T) {
 	require.Equal(t, "", ServiceTierFromRequest(nil))
 }
 
+func TestResolveRequestedServiceTierPrefersOverrideIncludingRemoval(t *testing.T) {
+	info := &RelayInfo{
+		ParamOverrideServiceTier:        "fast",
+		ParamOverrideServiceTierApplied: true,
+		Request:                         &dto.OpenAIResponsesRequest{ServiceTier: "default"},
+	}
+	require.Equal(t, "fast", ResolveRequestedServiceTier(nil, info))
+	require.True(t, ServiceTierForwarded(info))
+
+	info.ParamOverrideServiceTier = ""
+	require.Equal(t, "", ResolveRequestedServiceTier(nil, info))
+	require.False(t, ServiceTierForwarded(info))
+}
+
 func TestResolveRequestedServiceTierPrefersRequestThenBillingBody(t *testing.T) {
 	info := &RelayInfo{
 		Request: &dto.OpenAIResponsesRequest{ServiceTier: "fast"},
